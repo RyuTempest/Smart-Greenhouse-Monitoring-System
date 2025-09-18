@@ -26,7 +26,7 @@ This is an enhanced Smart Greenhouse monitoring and control system with a modern
 - **`api.php`**: Comprehensive REST API for system integration with multiple endpoints
 - **`index.php`**: System information and navigation page with URL routing
 - **`error.php`**: Custom error handling page with user-friendly interface
-- **`.htaccess`**: URL rewriting rules and security configurations
+
 
 ### Database (`greenhouse`)
 - **`readings`**: Sensor data storage (humidity, temperature, soil, light) with proper indexing

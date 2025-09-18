@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include <DHT.h>
+#include <Wire.h>
+#include <ClosedCube_HDC1080.h>
 #include <HTTPClient.h>
 
 // ====== WiFi Credentials ======
@@ -11,10 +12,14 @@ const char* password = "123456789";
 // e.g. "http://192.168.246.168/greenhouse/insert.php"
 const char* serverName = "http://192.168.137.1/greenhouse/insert.php"; 
 
-// ====== DHT Sensor Setup ======
-#define DHTPIN 4
-#define DHTTYPE DHT11
-DHT dht(DHTPIN, DHTTYPE);
+// ====== HDC1080 Sensor Setup ======
+ClosedCube_HDC1080 hdc1080;
+bool hdc1080_connected = false;
+
+// ====== Humidity Calibration for Greenhouse ======
+float humidity_offset = 0.0;  // Calibration offset
+float humidity_scale = 1.0;   // Calibration scale factor
+const int humidity_samples = 5;  // Number of samples for averaging
 
 // ====== Sensor Pins ======
 #define SOIL_SENSOR_PIN 34
@@ -30,6 +35,15 @@ WebServer server(80);
 // ====== Database Logging Interval ======
 unsigned long lastSendTime = 0;
 const unsigned long sendInterval = 5000; // 5 seconds
+
+// ====== Function Declarations ======
+void scanI2C();
+bool initHDC1080();
+float readTemperatureAccurate();
+float readHumidityAccurate();
+void calibrateHumidity(float reference_humidity);
+void handleCalibrate();
+void checkWiFi();
 
 // ----------------------------------------------------------------------------
 // Sends sensor data (humidity, temperature, soil, light) to your local PHP script for MySQL
@@ -49,9 +63,9 @@ void sendToDatabase(float humidity, float temperature, int soil, int light) {
         int httpCode = http.GET();
 
         if (httpCode > 0) {
-            Serial.println("[MySQL] Sent: " + url);
+           // Serial.println("[MySQL] Sent: " + url);
             String response = http.getString();
-            Serial.println("[MySQL] Response: " + response);
+           // Serial.println("[MySQL] Response: " + response);
         } else {
             Serial.println("[MySQL] Failed to connect to server.");
         }
@@ -150,28 +164,41 @@ void handleRelayControl() {
 // Sensor Endpoints
 // ----------------------------------------------------------------------------
 void handleHumidity() {
-    float humidity = dht.readHumidity();
-    if (isnan(humidity)) humidity = -1;
-    server.send(200, "text/plain", String(humidity));
+    float humidity = readHumidityAccurate();
+    if (humidity == -999.0) humidity = -1;
+    server.send(200, "text/plain", String(humidity, 2));
 }
 
 void handleTemperature() {
-    float temperature = dht.readTemperature();
-    if (isnan(temperature)) temperature = -1;
-    server.send(200, "text/plain", String(temperature));
+    float temperature = readTemperatureAccurate();
+    if (temperature == -999.0) temperature = -1;
+    server.send(200, "text/plain", String(temperature, 2));
 }
 
 void handleSoilMoisture() {
-    int soilRaw = analogRead(SOIL_SENSOR_PIN);
+    // Take multiple readings for better accuracy
+    int soil_sum = 0;
+    const int soil_samples = 3;
+    
+    for (int i = 0; i < soil_samples; i++) {
+        soil_sum += analogRead(SOIL_SENSOR_PIN);
+        delay(10);
+    }
+    
+    int soilRaw = soil_sum / soil_samples;
+    
+    // Greenhouse-optimized soil moisture calibration
+    // Adjust these values based on your specific soil sensor
     int wet = 1000, dry = 3200;
     int percent = map(soilRaw, dry, wet, 0, 100);
     percent = constrain(percent, 0, 100);
 
     String label;
-    if (percent < 20) label = "Very Dry";
-    else if (percent < 40) label = "Dry";
-    else if (percent < 70) label = "Moist";
-    else label = "Wet";
+    if (percent < 15) label = "Very Dry";
+    else if (percent < 30) label = "Dry";
+    else if (percent < 60) label = "Moist";
+    else if (percent < 80) label = "Wet";
+    else label = "Saturated";
 
     server.send(200, "text/plain", String(percent) + "|" + label);
 }
@@ -185,11 +212,11 @@ void handleLightIntensity() {
 // JSON Status Endpoint
 // ----------------------------------------------------------------------------
 void handleStatus() {
-    float humidity = dht.readHumidity();
-    if (isnan(humidity)) humidity = -1;
+    float humidity = readHumidityAccurate();
+    if (humidity == -999.0) humidity = -1;
     
-    float temperature = dht.readTemperature();
-    if (isnan(temperature)) temperature = -1;
+    float temperature = readTemperatureAccurate();
+    if (temperature == -999.0) temperature = -1;
     
     int soilRaw = analogRead(SOIL_SENSOR_PIN);
     int soilPercent = map(soilRaw, 3200, 1000, 0, 100);
@@ -201,10 +228,11 @@ void handleStatus() {
     json += "\"status\":\"online\",";
     json += "\"uptime\":" + String(millis() / 1000) + ",";
     json += "\"sensors\":{";
-    json += "\"humidity\":" + String(humidity) + ",";
-    json += "\"temperature\":" + String(temperature) + ",";
+    json += "\"humidity\":" + String(humidity, 2) + ",";
+    json += "\"temperature\":" + String(temperature, 2) + ",";
     json += "\"soil\":" + String(soilPercent) + ",";
-    json += "\"light\":" + String(light);
+    json += "\"light\":" + String(light) + ",";
+    json += "\"hdc1080_connected\":" + String(hdc1080_connected ? "true" : "false");
     json += "},";
     json += "\"relays\":{";
     json += "\"pump\":" + String(digitalRead(RELAY_PUMP) == LOW ? "on" : "off") + ",";
@@ -223,6 +251,142 @@ void handleStatus() {
 }
 
 // ----------------------------------------------------------------------------
+// Calibration Handler
+// ----------------------------------------------------------------------------
+void handleCalibrate() {
+    String ref_humidity_str = server.arg("humidity");
+    
+    if (ref_humidity_str.length() > 0) {
+        float ref_humidity = ref_humidity_str.toFloat();
+        if (ref_humidity >= 0 && ref_humidity <= 100) {
+            calibrateHumidity(ref_humidity);
+            server.send(200, "text/plain", "Calibration completed. Offset: " + String(humidity_offset, 2) + "%");
+        } else {
+            server.send(400, "text/plain", "Invalid humidity value. Must be 0-100");
+        }
+    } else {
+        server.send(400, "text/plain", "Missing humidity parameter. Use: /calibrate?humidity=50.0");
+    }
+}
+
+// ----------------------------------------------------------------------------
+// I2C Scanner
+// ----------------------------------------------------------------------------
+void scanI2C() {
+    Serial.println("Scanning I2C devices...");
+    byte count = 0;
+    for (byte i = 8; i < 120; i++) {
+        Wire.beginTransmission(i);
+        if (Wire.endTransmission() == 0) {
+            Serial.print("Found I2C device at address 0x");
+            if (i < 16) Serial.print("0");
+            Serial.print(i, HEX);
+            Serial.println(" !");
+            count++;
+        }
+    }
+    if (count == 0) {
+        Serial.println("No I2C devices found");
+    }
+}
+
+// ----------------------------------------------------------------------------
+// HDC1080 Sensor Functions
+// ----------------------------------------------------------------------------
+bool initHDC1080() {
+    Wire.begin();
+    delay(100);
+    
+    // Try different I2C addresses for HDC1080
+    uint8_t addresses[] = {0x40, 0x41, 0x42, 0x43};
+    
+    for (int i = 0; i < 4; i++) {
+        hdc1080.begin(addresses[i]);
+        delay(100);
+        
+        // Test if sensor responds
+        float test_temp = hdc1080.readTemperature();
+        if (!isnan(test_temp) && test_temp > -50 && test_temp < 100) {
+            Serial.println("HDC1080 found at address 0x" + String(addresses[i], HEX));
+            hdc1080_connected = true;
+            return true;
+        }
+    }
+    
+    Serial.println("HDC1080 not found!");
+    hdc1080_connected = false;
+    return false;
+}
+
+float readTemperatureAccurate() {
+    if (!hdc1080_connected) return -999.0;
+    
+    float temp = hdc1080.readTemperature();
+    if (isnan(temp) || temp < -50 || temp > 100) {
+        return -999.0;
+    }
+    return temp;
+}
+
+float readHumidityAccurate() {
+    if (!hdc1080_connected) return -999.0;
+    
+    float humidity_sum = 0.0;
+    int valid_readings = 0;
+    
+    // Take multiple samples for better accuracy and stability
+    for (int i = 0; i < humidity_samples; i++) {
+        float raw_humidity = hdc1080.readHumidity();
+        
+        // Validate reading
+        if (!isnan(raw_humidity) && raw_humidity >= 0.0 && raw_humidity <= 100.0) {
+            humidity_sum += raw_humidity;
+            valid_readings++;
+        }
+        delay(50); // Small delay between readings
+    }
+    
+    if (valid_readings == 0) return -999.0;
+    
+    // Calculate average
+    float avg_humidity = humidity_sum / valid_readings;
+    
+    // Apply calibration for greenhouse conditions
+    float calibrated_humidity = (avg_humidity * humidity_scale) + humidity_offset;
+    
+    // Ensure within valid range
+    calibrated_humidity = constrain(calibrated_humidity, 0.0, 100.0);
+    
+    return calibrated_humidity;
+}
+
+// ----------------------------------------------------------------------------
+// Humidity Calibration Function
+// ----------------------------------------------------------------------------
+void calibrateHumidity(float reference_humidity) {
+    if (!hdc1080_connected) return;
+    
+    // Take multiple readings for calibration
+    float raw_sum = 0.0;
+    int valid_readings = 0;
+    
+    for (int i = 0; i < 10; i++) {
+        float raw_humidity = hdc1080.readHumidity();
+        if (!isnan(raw_humidity) && raw_humidity >= 0.0 && raw_humidity <= 100.0) {
+            raw_sum += raw_humidity;
+            valid_readings++;
+        }
+        delay(100);
+    }
+    
+    if (valid_readings > 0) {
+        float avg_raw = raw_sum / valid_readings;
+        humidity_offset = reference_humidity - avg_raw;
+        Serial.println("Humidity calibrated: Offset = " + String(humidity_offset, 2) + "%");
+    }
+}
+
+// ----------------------------------------------------------------------------
 // WiFi Reconnect
 // ----------------------------------------------------------------------------
 void checkWiFi() {
@@ -237,7 +401,19 @@ void checkWiFi() {
 // ----------------------------------------------------------------------------
 void setup() {
     Serial.begin(115200);
-    dht.begin();
+    delay(1000);
+    
+    Serial.println("Starting Smart Greenhouse System...");
+    
+    // Initialize I2C and scan for devices
+    scanI2C();
+    
+    // Initialize HDC1080 sensor
+    if (initHDC1080()) {
+        Serial.println("HDC1080 sensor initialized successfully");
+    } else {
+        Serial.println("Warning: HDC1080 sensor not found - using fallback values");
+    }
 
     pinMode(RELAY_PUMP, OUTPUT);
     pinMode(RELAY_LIGHT, OUTPUT);
@@ -266,6 +442,7 @@ void setup() {
     server.on("/soil", handleSoilMoisture);
     server.on("/light", handleLightIntensity);
     server.on("/status", handleStatus);
+    server.on("/calibrate", handleCalibrate);
 
     server.begin();
 }
@@ -279,9 +456,9 @@ void loop() {
 
     // Every 5 seconds, insert data to MySQL
     if (millis() - lastSendTime > sendInterval) {
-        float humidity = dht.readHumidity();
-        float temperature = dht.readTemperature();
-        if (!isnan(humidity) && !isnan(temperature)) {
+        float humidity = readHumidityAccurate();
+        float temperature = readTemperatureAccurate();
+        if (humidity != -999.0 && temperature != -999.0) {
             int soilRaw = analogRead(SOIL_SENSOR_PIN);
             int soilPercent = map(soilRaw, 3200, 1000, 0, 100);
             soilPercent = constrain(soilPercent, 0, 100);

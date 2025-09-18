@@ -1195,6 +1195,11 @@ $refresh_interval = 2000; // 2 seconds
                         <span>Humid</span>
                     </div>
                 </div>
+                <div style="margin-top: 12px; text-align: center;">
+                    <button class="btn btn-on" onclick="calibrateHumidity()" style="font-size: 0.8rem; padding: 8px 16px; min-width: 120px;" id="calibrate-btn">
+                        <i class="fas fa-cog"></i> Calibrate
+                    </button>
+                </div>
             </div>
 
             <!-- Temperature Card -->
@@ -1408,17 +1413,21 @@ $refresh_interval = 2000; // 2 seconds
                     if (apiData.status === 'success' && apiData.data) {
                         const data = apiData.data;
                         
-                        // Update humidity
+                        // Update humidity (HDC1080 with 2 decimal precision)
                         if (data.humidity !== undefined) {
                             const humidity = parseFloat(data.humidity);
-                            if (!isNaN(humidity)) {
-                                document.getElementById('humidity').innerHTML = humidity.toFixed(1) + ' <span class="card-unit">%</span>';
+                            if (!isNaN(humidity) && humidity !== -999.0) {
+                                document.getElementById('humidity').innerHTML = humidity.toFixed(2) + ' <span class="card-unit">%</span>';
                                 document.getElementById('humidity-progress').style.width = Math.min(100, Math.max(0, humidity)) + '%';
                                 
                                 let humidityLabel = 'Optimal';
                                 if (humidity < 30) humidityLabel = 'Dry';
+                                else if (humidity < 40) humidityLabel = 'Low';
                                 else if (humidity > 80) humidityLabel = 'Humid';
+                                else if (humidity > 70) humidityLabel = 'High';
                                 document.getElementById('humidity-label').textContent = humidityLabel;
+                            } else if (humidity === -999.0) {
+                                showSensorError('humidity', 'HDC1080 Error');
                             } else {
                                 showSensorError('humidity', 'Invalid Data');
                             }
@@ -1426,11 +1435,11 @@ $refresh_interval = 2000; // 2 seconds
                             showSensorOffline('humidity');
                         }
                         
-                        // Update temperature
+                        // Update temperature (HDC1080 with 2 decimal precision)
                         if (data.temperature !== undefined) {
                             const temperature = parseFloat(data.temperature);
-                            if (!isNaN(temperature)) {
-                                document.getElementById('temperature').innerHTML = temperature.toFixed(1) + ' <span class="card-unit">°C</span>';
+                            if (!isNaN(temperature) && temperature !== -999.0) {
+                                document.getElementById('temperature').innerHTML = temperature.toFixed(2) + ' <span class="card-unit">°C</span>';
                                 // Temperature progress bar (15-35°C range)
                                 const tempProgress = Math.min(100, Math.max(0, ((temperature - 15) / 20) * 100));
                                 document.getElementById('temperature-progress').style.width = tempProgress + '%';
@@ -1440,6 +1449,8 @@ $refresh_interval = 2000; // 2 seconds
                                 else if (temperature > 35) temperatureLabel = 'Hot';
                                 else if (temperature < 20 || temperature > 30) temperatureLabel = 'Moderate';
                                 document.getElementById('temperature-label').textContent = temperatureLabel;
+                            } else if (temperature === -999.0) {
+                                showSensorError('temperature', 'HDC1080 Error');
                             } else {
                                 showSensorError('temperature', 'Invalid Data');
                             }
@@ -1476,6 +1487,16 @@ $refresh_interval = 2000; // 2 seconds
                             showSensorOffline('light');
                         }
                         
+                        // Check HDC1080 connection status
+                        if (data.hdc1080_connected !== undefined) {
+                            const statusIndicator = document.querySelector('.status-indicator span:last-child');
+                            if (data.hdc1080_connected) {
+                                statusIndicator.textContent = 'System Online (HDC1080)';
+                            } else {
+                                statusIndicator.textContent = 'System Online (Sensor Error)';
+                            }
+                        }
+                        
                         // Update timestamp
                         const now = new Date();
                         document.getElementById('last-update').textContent = 'Last updated: ' + now.toLocaleTimeString();
@@ -1496,19 +1517,23 @@ $refresh_interval = 2000; // 2 seconds
         // Fallback function to get data directly from ESP32
         async function updateFromESP32() {
             try {
-                // Update humidity
+                // Update humidity (HDC1080 with 2 decimal precision)
                 try {
                     const humidityResponse = await fetch(`http://${ESP32_IP}/humidity`, { timeout: 3000 });
                     if (humidityResponse.ok) {
                         const humidity = parseFloat(await humidityResponse.text());
-                        if (!isNaN(humidity)) {
-                            document.getElementById('humidity').innerHTML = humidity.toFixed(1) + ' <span class="card-unit">%</span>';
+                        if (!isNaN(humidity) && humidity !== -999.0) {
+                            document.getElementById('humidity').innerHTML = humidity.toFixed(2) + ' <span class="card-unit">%</span>';
                             document.getElementById('humidity-progress').style.width = Math.min(100, Math.max(0, humidity)) + '%';
                             
                             let humidityLabel = 'Optimal';
                             if (humidity < 30) humidityLabel = 'Dry';
+                            else if (humidity < 40) humidityLabel = 'Low';
                             else if (humidity > 80) humidityLabel = 'Humid';
+                            else if (humidity > 70) humidityLabel = 'High';
                             document.getElementById('humidity-label').textContent = humidityLabel;
+                        } else if (humidity === -999.0) {
+                            showSensorError('humidity', 'HDC1080 Error');
                         } else {
                             showSensorError('humidity', 'Invalid Data');
                         }
@@ -1519,13 +1544,13 @@ $refresh_interval = 2000; // 2 seconds
                     showSensorError('humidity', 'Connection Error');
                 }
 
-                // Update temperature
+                // Update temperature (HDC1080 with 2 decimal precision)
                 try {
                     const temperatureResponse = await fetch(`http://${ESP32_IP}/temperature`, { timeout: 3000 });
                     if (temperatureResponse.ok) {
                         const temperature = parseFloat(await temperatureResponse.text());
-                        if (!isNaN(temperature)) {
-                            document.getElementById('temperature').innerHTML = temperature.toFixed(1) + ' <span class="card-unit">°C</span>';
+                        if (!isNaN(temperature) && temperature !== -999.0) {
+                            document.getElementById('temperature').innerHTML = temperature.toFixed(2) + ' <span class="card-unit">°C</span>';
                             // Temperature progress bar (15-35°C range)
                             const tempProgress = Math.min(100, Math.max(0, ((temperature - 15) / 20) * 100));
                             document.getElementById('temperature-progress').style.width = tempProgress + '%';
@@ -1535,6 +1560,8 @@ $refresh_interval = 2000; // 2 seconds
                             else if (temperature > 35) temperatureLabel = 'Hot';
                             else if (temperature < 20 || temperature > 30) temperatureLabel = 'Moderate';
                             document.getElementById('temperature-label').textContent = temperatureLabel;
+                        } else if (temperature === -999.0) {
+                            showSensorError('temperature', 'HDC1080 Error');
                         } else {
                             showSensorError('temperature', 'Invalid Data');
                         }
@@ -1598,6 +1625,103 @@ $refresh_interval = 2000; // 2 seconds
             }
         }
         
+        // Humidity calibration function
+        async function calibrateHumidity() {
+            const referenceHumidity = prompt('Enter the reference humidity value from your calibrated hygrometer (0-100%):');
+            
+            if (referenceHumidity === null) return; // User cancelled
+            
+            const refValue = parseFloat(referenceHumidity);
+            if (isNaN(refValue) || refValue < 0 || refValue > 100) {
+                alert('Please enter a valid humidity value between 0 and 100');
+                return;
+            }
+            
+            // Show loading state
+            const calibrateBtn = event.target;
+            const originalText = calibrateBtn.innerHTML;
+            calibrateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Calibrating...';
+            calibrateBtn.disabled = true;
+            
+            try {
+                // Create a timeout promise
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Request timeout')), 10000)
+                );
+                
+                // Create the fetch promise
+                const fetchPromise = fetch(`http://${ESP32_IP}/calibrate?humidity=${refValue}`, {
+                    method: 'GET',
+                    mode: 'no-cors', // This helps with CORS issues
+                    cache: 'no-cache',
+                    headers: {
+                        'Accept': 'text/plain',
+                    }
+                });
+                
+                // Race between fetch and timeout
+                const response = await Promise.race([fetchPromise, timeoutPromise]);
+                
+                if (response && response.ok) {
+                    const message = await response.text();
+                    alert('Calibration successful: ' + message);
+                    // Refresh sensor data after calibration
+                    setTimeout(updateSensorData, 1000);
+                } else {
+                    // For no-cors mode, we can't read the response, so assume success
+                    alert('Calibration request sent. Please check ESP32 serial monitor for confirmation.');
+                    // Refresh sensor data after calibration
+                    setTimeout(updateSensorData, 2000);
+                }
+            } catch (error) {
+                console.error('Calibration error:', error);
+                
+                // Try alternative method using XMLHttpRequest
+                try {
+                    const xhr = new XMLHttpRequest();
+                    xhr.timeout = 10000;
+                    
+                    xhr.onload = function() {
+                        if (xhr.status === 200) {
+                            alert('Calibration successful: ' + xhr.responseText);
+                            setTimeout(updateSensorData, 1000);
+                        } else {
+                            alert('Calibration failed. HTTP Status: ' + xhr.status);
+                        }
+                        // Restore button
+                        calibrateBtn.innerHTML = originalText;
+                        calibrateBtn.disabled = false;
+                    };
+                    
+                    xhr.onerror = function() {
+                        alert('Calibration failed: Network error. Please check ESP32 connection and IP address.');
+                        // Restore button
+                        calibrateBtn.innerHTML = originalText;
+                        calibrateBtn.disabled = false;
+                    };
+                    
+                    xhr.ontimeout = function() {
+                        alert('Calibration failed: Request timeout. Please check ESP32 connection.');
+                        // Restore button
+                        calibrateBtn.innerHTML = originalText;
+                        calibrateBtn.disabled = false;
+                    };
+                    
+                    xhr.open('GET', `http://${ESP32_IP}/calibrate?humidity=${refValue}`, true);
+                    xhr.send();
+                    return; // Exit early, button will be restored in callbacks
+                    
+                } catch (xhrError) {
+                    console.error('XMLHttpRequest also failed:', xhrError);
+                    alert('Calibration failed: Unable to connect to ESP32. Please check:\n1. ESP32 IP address: ' + ESP32_IP + '\n2. ESP32 is connected to WiFi\n3. ESP32 is running the updated firmware');
+                }
+            } finally {
+                // Restore button state
+                calibrateBtn.innerHTML = originalText;
+                calibrateBtn.disabled = false;
+            }
+        }
+
         // Helper functions for sensor display
         function showSensorOffline(sensor) {
             document.getElementById(sensor).innerHTML = '<span style="color: #e74c3c;">Offline</span>';
@@ -1639,11 +1763,13 @@ $refresh_interval = 2000; // 2 seconds
             }
         }
 
-        // Helper functions for history table status indicators
+        // Helper functions for history table status indicators (HDC1080 optimized)
         function getHumidityStatus(humidity) {
-            if (humidity < 30) return { status: 'low', color: '#e74c3c', icon: 'fas fa-exclamation-triangle' };
-            if (humidity > 80) return { status: 'high', color: '#9b59b6', icon: 'fas fa-exclamation-triangle' };
+            if (humidity < 30) return { status: 'very_low', color: '#e74c3c', icon: 'fas fa-exclamation-triangle' };
+            if (humidity < 40) return { status: 'low', color: '#f39c12', icon: 'fas fa-exclamation-circle' };
             if (humidity >= 40 && humidity <= 70) return { status: 'optimal', color: '#27ae60', icon: 'fas fa-check-circle' };
+            if (humidity > 70 && humidity <= 80) return { status: 'high', color: '#f39c12', icon: 'fas fa-info-circle' };
+            if (humidity > 80) return { status: 'very_high', color: '#9b59b6', icon: 'fas fa-exclamation-triangle' };
             return { status: 'moderate', color: '#f39c12', icon: 'fas fa-info-circle' };
         }
 
@@ -1775,13 +1901,13 @@ $refresh_interval = 2000; // 2 seconds
                     tr.innerHTML = `
                         <td>
                             <div class="sensor-value">
-                                <span class="value">${row.humidity}%</span>
+                                <span class="value">${parseFloat(row.humidity).toFixed(2)}%</span>
                                 <i class="${humidityStatus.icon}" style="color: ${humidityStatus.color}; margin-left: 8px;"></i>
                             </div>
                         </td>
                         <td>
                             <div class="sensor-value">
-                                <span class="value">${row.temperature}°C</span>
+                                <span class="value">${parseFloat(row.temperature).toFixed(2)}°C</span>
                                 <i class="${temperatureStatus.icon}" style="color: ${temperatureStatus.color}; margin-left: 8px;"></i>
                             </div>
                         </td>
@@ -1846,8 +1972,33 @@ $refresh_interval = 2000; // 2 seconds
             }
         }
 
+        // Debug function to test ESP32 connection
+        async function testESP32Connection() {
+            try {
+                const response = await fetch(`http://${ESP32_IP}/status`, { timeout: 5000 });
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('ESP32 Status:', data);
+                    return true;
+                } else {
+                    console.error('ESP32 responded with status:', response.status);
+                    return false;
+                }
+            } catch (error) {
+                console.error('ESP32 connection test failed:', error);
+                return false;
+            }
+        }
+
         // Initialize and start auto-refresh
         document.addEventListener('DOMContentLoaded', function() {
+            // Test ESP32 connection on startup
+            testESP32Connection().then(connected => {
+                if (!connected) {
+                    console.warn('ESP32 connection test failed. Calibration may not work properly.');
+                }
+            });
+            
             updateSensorData();
             updateHistory();
             checkSystemStatus();

@@ -1,0 +1,57 @@
+# Smart Greenhouse System - URL Rewriting Rules
+# This file helps with clean URLs and redirects
+
+# Enable URL rewriting
+RewriteEngine On
+
+# Redirect root to index.php (which will handle the routing)
+RewriteRule ^$ index.php [L]
+
+# Handle API routes - fix the API routing
+RewriteRule ^api/(.*)$ api.php?endpoint=$1 [L,QSA]
+
+# Handle direct file access with clean URLs
+RewriteRule ^dashboard/?$ dashboard.php [L]
+RewriteRule ^history/?$ history.php [L]
+RewriteRule ^view/?$ view.php [L]
+
+# Handle 404 errors gracefully
+ErrorDocument 404 /greenhouse/error.php
+
+# Security: Block access to sensitive files
+<Files "database_schema.sql">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files ".htaccess">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Set default charset
+AddDefaultCharset UTF-8
+
+# Enable compression for better performance
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/xml
+    AddOutputFilterByType DEFLATE application/xhtml+xml
+    AddOutputFilterByType DEFLATE application/rss+xml
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/x-javascript
+</IfModule>
+
+# Set cache headers for static content
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/jpg "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/gif "access plus 1 month"
+</IfModule>
